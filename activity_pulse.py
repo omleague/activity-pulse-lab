@@ -42,6 +42,7 @@ class PulseConfig:
     rest_seconds: float = 1.5
 
     bold_active_text: bool = True
+    color_strength: float = 0.3
     pulse_overshoot: float = 0.35
 
     reference_text_length: int = 32
@@ -72,6 +73,21 @@ def _interpolate_rgb(
     )
 
 
+def _dampen_rgb(
+    rgb: RGB,
+    strength: float,
+) -> RGB:
+    strength = max(0.0, min(1.0, strength))
+
+    neutral: RGB = (235, 235, 235)
+
+    return _interpolate_rgb(
+        neutral,
+        rgb,
+        strength,
+    )
+
+
 def _interpolate_scheme(
     start: ColorScheme,
     end: ColorScheme,
@@ -99,13 +115,20 @@ def _scheme_for_cycle(
     return _interpolate_scheme(current_scheme, next_scheme, 0.5)
 
 
-def _rgb_style(
-    rgb: RGB,
+def _activity_style(
+    rgb: RGB | None,
     *,
     bold: bool = False,
 ) -> Style:
+    if rgb is None:
+        return Style(bold=bold)
+
     red, green, blue = rgb
-    return Style(color=f"rgb({red},{green},{blue})", bold=bold)
+
+    return Style(
+        color=f"rgb({red},{green},{blue})",
+        bold=bold,
+    )
 
 
 def _maximum_center_distance(text_length: int) -> float:
@@ -170,7 +193,7 @@ def _render_baseline(
 
     return Text(
         text,
-        style=_rgb_style(color),
+        style=_activity_style(color),
     )
 
 
@@ -181,6 +204,7 @@ def _render_heartbeat_frame(
     rest_color: RGB | None,
     *,
     bold_active_text: bool,
+    color_strength: float,
 ) -> Text:
     if not text:
         return Text()
@@ -202,14 +226,22 @@ def _render_heartbeat_frame(
         if normalized_distance > progress:
             continue
 
-        pulse_rgb = _interpolate_rgb(
-            light_color,
-            dark_color,
-            progress - normalized_distance,
-        )
+        if color_strength <= 0.0:
+            pulse_rgb = None
+        else:
+            full_pulse_rgb = _interpolate_rgb(
+                light_color,
+                dark_color,
+                progress - normalized_distance,
+            )
+
+            pulse_rgb = _dampen_rgb(
+                full_pulse_rgb,
+                color_strength,
+            )
 
         rendered.stylize(
-            _rgb_style(
+            _activity_style(
                 pulse_rgb,
                 bold=bold_active_text,
             ),
@@ -317,6 +349,7 @@ class _HeartbeatRenderable:
             scheme,
             rest_color,
             bold_active_text=self.config.bold_active_text,
+            color_strength=self.config.color_strength,
         )
 
 
