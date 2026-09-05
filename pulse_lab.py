@@ -9,7 +9,7 @@ from typing import Iterator
 from activity_pulse import activity_pulse
 
 
-DEMO_TEXT = "Verifying vault integrity - but using a longer string."
+DEMO_TEXT = "Verifying vault integrity -"
 
 DEMO_STOP_KEY = "r"
 DEMO_AUTO_STOP_SECONDS = 300.0
