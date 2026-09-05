@@ -42,7 +42,7 @@ class PulseConfig:
     rest_seconds: float = 1.5
 
     bold_active_text: bool = True
-    color_strength: float = 0.3
+    color_strength: float = .3
     pulse_overshoot: float = 0.35
 
     reference_text_length: int = 32
@@ -426,6 +426,7 @@ def activity_pulse(
     *,
     console: Console | None = None,
     config: PulseConfig = DEFAULT_PULSE_CONFIG,
+    enabled: bool = True,
 ) -> Iterator[None]:
     """
     Show indeterminate activity while the caller performs work.
@@ -434,17 +435,29 @@ def activity_pulse(
     Exceptions and interruptions from the caller are not consumed.
     """
     active_console = console or Console()
+    baseline = _render_baseline(text)
+
+    if (
+        not enabled
+        or not active_console.is_terminal
+        or active_console.color_system is None
+    ):
+        active_console.print(baseline)
+        yield
+        return
+
     heartbeat = _HeartbeatRenderable(
         text,
         config,
     )
-    baseline = _render_baseline(text)
 
     with Live(
         heartbeat,
         console=active_console,
         refresh_per_second=config.refresh_per_second,
         transient=False,
+        redirect_stdout=False,
+        redirect_stderr=False,
     ) as live:
         try:
             yield
