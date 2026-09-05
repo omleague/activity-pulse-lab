@@ -1,3 +1,5 @@
+"""Reusable indeterminate activity pulse for Rich terminal output."""
+
 from __future__ import annotations
 
 import random
@@ -12,6 +14,14 @@ from rich.live import Live
 from rich.style import Style
 from rich.text import Text
 
+
+
+__all__ = [
+    "DEFAULT_COLOR_SCHEMES",
+    "DEFAULT_PULSE_CONFIG",
+    "PulseConfig",
+    "activity_pulse",
+]
 
 RGB = tuple[int, int, int]
 ColorScheme = tuple[RGB, RGB]
@@ -42,7 +52,8 @@ class PulseConfig:
     rest_seconds: float = 1.5
 
     bold_active_text: bool = True
-    color_strength: float = .3
+    color_strength: float = 0.3
+    neutral_dampening_color: RGB = (235, 235, 235)
     pulse_overshoot: float = 0.35
 
     reference_text_length: int = 32
@@ -145,10 +156,9 @@ def _interpolate_rgb(
 def _dampen_rgb(
     rgb: RGB,
     strength: float,
+    neutral: RGB,
 ) -> RGB:
     strength = max(0.0, min(1.0, strength))
-
-    neutral: RGB = (235, 235, 235)
 
     return _interpolate_rgb(
         neutral,
@@ -274,6 +284,7 @@ def _render_heartbeat_frame(
     *,
     bold_active_text: bool,
     color_strength: float,
+    neutral_dampening_color: RGB,
 ) -> Text:
     if not text:
         return Text()
@@ -307,6 +318,7 @@ def _render_heartbeat_frame(
             pulse_rgb = _dampen_rgb(
                 full_pulse_rgb,
                 color_strength,
+                neutral_dampening_color,
             )
 
         rendered.stylize(
@@ -417,6 +429,7 @@ class _HeartbeatRenderable:
             rest_color,
             bold_active_text=self.config.bold_active_text,
             color_strength=self.config.color_strength,
+            neutral_dampening_color=self.config.neutral_dampening_color,
         )
 
 
