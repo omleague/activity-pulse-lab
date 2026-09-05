@@ -29,12 +29,8 @@ ColorScheme = tuple[RGB, RGB]
 
 DEFAULT_COLOR_SCHEMES: tuple[ColorScheme, ...] = (
     ((255, 151, 239), (157, 20, 139)),  # Magenta
-    ((215, 164, 255), (101, 35, 177)),  # Violet
     ((151, 236, 249), (20, 126, 145)),  # Cyan
-    ((143, 224, 209), (20, 112, 105)),  # Teal
-    ((247, 174, 112), (174, 82, 23)),  # Burnt orange
-    ((225, 162, 126), (133, 72, 43)),  # Copper
-    ((196, 157, 126), (92, 59, 40)),  # Umber
+    ((247, 174, 112), (174, 82, 23)),  # Orange
 )
 
 
@@ -52,7 +48,8 @@ class PulseConfig:
     rest_seconds: float = 1.5
 
     bold_active_text: bool = True
-    color_strength: float = 0.3
+    color_strength: float = 1.0
+    blend_between_schemes: bool = False
     neutral_dampening_color: RGB = (235, 235, 235)
     pulse_overshoot: float = 0.35
 
@@ -182,8 +179,15 @@ def _scheme_for_cycle(
     cycle_number: int,
     start_index: int,
     color_schemes: tuple[ColorScheme, ...],
+    *,
+    blend_between_schemes: bool = False,
 ) -> ColorScheme:
     stable_count = len(color_schemes)
+
+    if not blend_between_schemes:
+        scheme_index = (start_index + cycle_number) % stable_count
+        return color_schemes[scheme_index]
+
     stable_index = (start_index + (cycle_number // 2)) % stable_count
     current_scheme = color_schemes[stable_index]
 
@@ -191,7 +195,11 @@ def _scheme_for_cycle(
         return current_scheme
 
     next_scheme = color_schemes[(stable_index + 1) % stable_count]
-    return _interpolate_scheme(current_scheme, next_scheme, 0.5)
+    return _interpolate_scheme(
+        current_scheme,
+        next_scheme,
+        0.5,
+    )
 
 
 def _activity_style(
@@ -400,6 +408,7 @@ class _HeartbeatRenderable:
             cycle_number,
             self.start_scheme_index,
             self.config.color_schemes,
+            blend_between_schemes=self.config.blend_between_schemes,
         )
 
         peak_progress = (

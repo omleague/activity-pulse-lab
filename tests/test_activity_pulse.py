@@ -9,6 +9,7 @@ import signal
 
 import pytest
 from rich.console import Console
+from rich.text import Text
 
 import activity_pulse as pulse_module
 from activity_pulse import (
@@ -49,17 +50,66 @@ def _clear_recording_live() -> None:
     RecordingLive.instances.clear()
 
 
-def _interactive_console(*, no_color: bool = False) -> Console:
-    return Console(
-        file=io.StringIO(),
+def _interactive_console(
+    *,
+    no_color: bool = False,
+) -> tuple[Console, io.StringIO]:
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
         force_terminal=True,
         color_system="truecolor",
         no_color=no_color,
     )
+    return console, stream
 
 
 def test_default_config_is_valid() -> None:
     assert DEFAULT_PULSE_CONFIG.color_schemes == DEFAULT_COLOR_SCHEMES
+
+
+def test_default_palette_is_magenta_cyan_orange() -> None:
+    assert DEFAULT_COLOR_SCHEMES == (
+        ((255, 151, 239), (157, 20, 139)),
+        ((151, 236, 249), (20, 126, 145)),
+        ((247, 174, 112), (174, 82, 23)),
+    )
+    assert DEFAULT_PULSE_CONFIG.color_strength == 1.0
+    assert DEFAULT_PULSE_CONFIG.blend_between_schemes is False
+
+
+def test_color_schemes_advance_without_transition_cycles() -> None:
+    assert pulse_module._scheme_for_cycle(
+        0,
+        0,
+        DEFAULT_COLOR_SCHEMES,
+    ) == DEFAULT_COLOR_SCHEMES[0]
+
+    assert pulse_module._scheme_for_cycle(
+        1,
+        0,
+        DEFAULT_COLOR_SCHEMES,
+    ) == DEFAULT_COLOR_SCHEMES[1]
+
+    assert pulse_module._scheme_for_cycle(
+        2,
+        0,
+        DEFAULT_COLOR_SCHEMES,
+    ) == DEFAULT_COLOR_SCHEMES[2]
+
+    assert pulse_module._scheme_for_cycle(
+        3,
+        0,
+        DEFAULT_COLOR_SCHEMES,
+    ) == DEFAULT_COLOR_SCHEMES[0]
+
+
+def test_color_cycle_preserves_requested_start_index() -> None:
+    assert pulse_module._scheme_for_cycle(
+        0,
+        1,
+        DEFAULT_COLOR_SCHEMES,
+    ) == DEFAULT_COLOR_SCHEMES[1]
 
 
 def test_public_api_is_explicit() -> None:
@@ -290,9 +340,9 @@ def test_center_out_frame_styles_center_first() -> None:
 def test_enabled_false_prints_static_text_before_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    console = _interactive_console()
+    console, stream = _interactive_console()
 
-    def bomb_live(*args, **kwargs):
+    def bomb_live(*_args, **_kwargs):
         raise AssertionError("Live must not start.")
 
     monkeypatch.setattr(pulse_module, "Live", bomb_live)
@@ -302,18 +352,19 @@ def test_enabled_false_prints_static_text_before_work(
         console=console,
         enabled=False,
     ):
-        assert "Working -" in console.file.getvalue()
+        assert "Working -" in stream.getvalue()
 
 
 def test_non_tty_uses_static_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    stream = io.StringIO()
     console = Console(
-        file=io.StringIO(),
+        file=stream,
         force_terminal=False,
     )
 
-    def bomb_live(*args, **kwargs):
+    def bomb_live(*_args, **_kwargs):
         raise AssertionError("Live must not start.")
 
     monkeypatch.setattr(pulse_module, "Live", bomb_live)
@@ -321,19 +372,20 @@ def test_non_tty_uses_static_fallback(
     with activity_pulse("Working -", console=console):
         pass
 
-    assert "Working -" in console.file.getvalue()
+    assert "Working -" in stream.getvalue()
 
 
 def test_color_system_none_uses_static_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    stream = io.StringIO()
     console = Console(
-        file=io.StringIO(),
+        file=stream,
         force_terminal=True,
         color_system=None,
     )
 
-    def bomb_live(*args, **kwargs):
+    def bomb_live(*_args, **_kwargs):
         raise AssertionError("Live must not start.")
 
     monkeypatch.setattr(pulse_module, "Live", bomb_live)
@@ -341,7 +393,7 @@ def test_color_system_none_uses_static_fallback(
     with activity_pulse("Working -", console=console):
         pass
 
-    assert "Working -" in console.file.getvalue()
+    assert "Working -" in stream.getvalue()
 
 
 def test_no_color_does_not_disable_animation(
@@ -349,7 +401,7 @@ def test_no_color_does_not_disable_animation(
 ) -> None:
     monkeypatch.setattr(pulse_module, "Live", RecordingLive)
 
-    console = _interactive_console(no_color=True)
+    console, _ = _interactive_console(no_color=True)
 
     with activity_pulse("Working -", console=console):
         pass
@@ -362,7 +414,7 @@ def test_callers_console_is_given_to_live(
 ) -> None:
     monkeypatch.setattr(pulse_module, "Live", RecordingLive)
 
-    console = _interactive_console()
+    console, _ = _interactive_console()
 
     with activity_pulse("Working -", console=console):
         pass
@@ -378,7 +430,7 @@ def test_live_does_not_redirect_stdout_or_stderr(
 
     with activity_pulse(
         "Working -",
-        console=_interactive_console(),
+        console=_interactive_console()[0],
     ):
         pass
 
@@ -395,7 +447,7 @@ def test_live_is_non_transient(
 
     with activity_pulse(
         "Working -",
-        console=_interactive_console(),
+        console=_interactive_console()[0],
     ):
         pass
 
@@ -409,7 +461,7 @@ def test_clean_exit_restores_static_baseline(
 
     with activity_pulse(
         "Working -",
-        console=_interactive_console(),
+        console=_interactive_console()[0],
     ):
         pass
 
@@ -419,6 +471,7 @@ def test_clean_exit_restores_static_baseline(
 
     final_renderable, refresh = live.updates[0]
 
+    assert isinstance(final_renderable, Text)
     assert final_renderable.plain == "Working -"
     assert refresh is True
     assert live.exited is True
@@ -434,7 +487,7 @@ def test_runtime_error_propagates_same_exception(
     with pytest.raises(RuntimeError) as caught:
         with activity_pulse(
             "Working -",
-            console=_interactive_console(),
+            console=_interactive_console()[0],
         ):
             raise error
 
@@ -451,7 +504,7 @@ def test_keyboard_interrupt_propagates_same_exception(
     with pytest.raises(KeyboardInterrupt) as caught:
         with activity_pulse(
             "Working -",
-            console=_interactive_console(),
+            console=_interactive_console()[0],
         ):
             raise error
 
@@ -468,7 +521,7 @@ def test_system_exit_propagates_same_exception(
     with pytest.raises(SystemExit) as caught:
         with activity_pulse(
             "Working -",
-            console=_interactive_console(),
+            console=_interactive_console()[0],
         ):
             raise error
 
@@ -480,13 +533,28 @@ def test_activity_pulse_does_not_take_signal_ownership(
 ) -> None:
     monkeypatch.setattr(pulse_module, "Live", RecordingLive)
 
-    def forbidden_signal_call(*args, **kwargs):
+    def forbidden_signal_call(*_args, **_kwargs):
         raise AssertionError("Activity Pulse must not install signal handlers.")
 
     monkeypatch.setattr(signal, "signal", forbidden_signal_call)
 
     with activity_pulse(
         "Working -",
-        console=_interactive_console(),
+        console=_interactive_console()[0],
     ):
         pass
+
+
+def test_color_schemes_can_opt_into_transition_cycles() -> None:
+    expected = pulse_module._interpolate_scheme(
+        DEFAULT_COLOR_SCHEMES[0],
+        DEFAULT_COLOR_SCHEMES[1],
+        0.5,
+    )
+
+    assert pulse_module._scheme_for_cycle(
+        1,
+        0,
+        DEFAULT_COLOR_SCHEMES,
+        blend_between_schemes=True,
+    ) == expected
