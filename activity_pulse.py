@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from contextlib import contextmanager
 from dataclasses import dataclass
-from math import sqrt
+from math import isfinite, sqrt
 from time import monotonic
 from typing import Iterator
 
@@ -54,6 +54,75 @@ class PulseConfig:
     underglow_peak_color: RGB = (220, 220, 220)
     underglow_rise_seconds: float = 20.0
     underglow_fall_seconds: float = 20.0
+
+
+    def __post_init__(self) -> None:
+        """Reject configuration values that make rendering undefined."""
+        if not self.color_schemes:
+            raise ValueError("PulseConfig.color_schemes must not be empty.")
+
+        if self.refresh_per_second <= 0:
+            raise ValueError(
+                "PulseConfig.refresh_per_second must be greater than zero."
+            )
+
+        if self.reference_text_length <= 0:
+            raise ValueError(
+                "PulseConfig.reference_text_length must be greater than zero."
+            )
+
+        timing_values = (
+            ("expand_seconds", self.expand_seconds),
+            ("contract_seconds", self.contract_seconds),
+            ("initial_rest_seconds", self.initial_rest_seconds),
+            ("rest_seconds", self.rest_seconds),
+            ("underglow_rise_seconds", self.underglow_rise_seconds),
+            ("underglow_fall_seconds", self.underglow_fall_seconds),
+        )
+
+        for name, value in timing_values:
+            if not isfinite(value) or value < 0:
+                raise ValueError(
+                    f"PulseConfig.{name} must be finite and non-negative."
+                )
+
+        if (
+            self.expand_seconds
+            + self.contract_seconds
+            + self.rest_seconds
+            == 0
+        ):
+            raise ValueError(
+                "PulseConfig heartbeat cycle must have a non-zero duration."
+            )
+
+        if (
+            self.underglow_enabled
+            and self.underglow_rise_seconds
+            + self.underglow_fall_seconds
+            == 0
+        ):
+            raise ValueError(
+                "Enabled underglow must have a non-zero cycle duration."
+            )
+
+        if (
+            not isfinite(self.min_beat_scale)
+            or not isfinite(self.max_beat_scale)
+            or self.min_beat_scale <= 0
+            or self.max_beat_scale <= 0
+            or self.min_beat_scale > self.max_beat_scale
+        ):
+            raise ValueError(
+                "PulseConfig beat scales must be finite, positive, "
+                "and min_beat_scale must not exceed max_beat_scale."
+            )
+
+        if not isfinite(self.color_strength):
+            raise ValueError("PulseConfig.color_strength must be finite.")
+
+        if not isfinite(self.pulse_overshoot):
+            raise ValueError("PulseConfig.pulse_overshoot must be finite.")
 
 
 DEFAULT_PULSE_CONFIG = PulseConfig()
@@ -258,8 +327,6 @@ class _HeartbeatRenderable:
         text: str,
         config: PulseConfig,
     ) -> None:
-        if not config.color_schemes:
-            raise ValueError("PulseConfig.color_schemes must not be empty.")
 
         self.text = text
         self.config = config
