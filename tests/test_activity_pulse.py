@@ -64,52 +64,34 @@ def _interactive_console(
     return console, stream
 
 
+def _active_indexes(rendered: Text) -> set[int]:
+    return {
+        span.start
+        for span in rendered.spans
+        if span.end == span.start + 1 and span.style.bold
+    }
+
+
 def test_default_config_is_valid() -> None:
     assert DEFAULT_PULSE_CONFIG.color_schemes == DEFAULT_COLOR_SCHEMES
 
 
-def test_default_palette_is_magenta_cyan_orange() -> None:
-    assert DEFAULT_COLOR_SCHEMES == (
-        ((255, 151, 239), (157, 20, 139)),
-        ((151, 236, 249), (20, 126, 145)),
-        ((247, 174, 112), (174, 82, 23)),
-    )
-    assert DEFAULT_PULSE_CONFIG.color_strength == 1.0
-    assert DEFAULT_PULSE_CONFIG.blend_between_schemes is False
+def test_default_palette_is_ten_color_rainbow() -> None:
+    assert len(DEFAULT_COLOR_SCHEMES) == 10
+    assert DEFAULT_PULSE_CONFIG.color_strength == pytest.approx(0.30)
+    assert DEFAULT_PULSE_CONFIG.mode == "left_to_right"
 
 
-def test_color_schemes_advance_without_transition_cycles() -> None:
+def test_color_schemes_progress_from_random_start() -> None:
     assert pulse_module._scheme_for_cycle(
-        0,
-        0,
-        DEFAULT_COLOR_SCHEMES,
+        0, 8, DEFAULT_COLOR_SCHEMES
+    ) == DEFAULT_COLOR_SCHEMES[8]
+    assert pulse_module._scheme_for_cycle(
+        1, 8, DEFAULT_COLOR_SCHEMES
+    ) == DEFAULT_COLOR_SCHEMES[9]
+    assert pulse_module._scheme_for_cycle(
+        2, 8, DEFAULT_COLOR_SCHEMES
     ) == DEFAULT_COLOR_SCHEMES[0]
-
-    assert pulse_module._scheme_for_cycle(
-        1,
-        0,
-        DEFAULT_COLOR_SCHEMES,
-    ) == DEFAULT_COLOR_SCHEMES[1]
-
-    assert pulse_module._scheme_for_cycle(
-        2,
-        0,
-        DEFAULT_COLOR_SCHEMES,
-    ) == DEFAULT_COLOR_SCHEMES[2]
-
-    assert pulse_module._scheme_for_cycle(
-        3,
-        0,
-        DEFAULT_COLOR_SCHEMES,
-    ) == DEFAULT_COLOR_SCHEMES[0]
-
-
-def test_color_cycle_preserves_requested_start_index() -> None:
-    assert pulse_module._scheme_for_cycle(
-        0,
-        1,
-        DEFAULT_COLOR_SCHEMES,
-    ) == DEFAULT_COLOR_SCHEMES[1]
 
 
 def test_public_api_is_explicit() -> None:
@@ -130,214 +112,160 @@ def test_activity_pulse_keeps_small_public_signature() -> None:
     ]
 
 
-def test_empty_color_schemes_are_rejected() -> None:
-    with pytest.raises(ValueError):
-        PulseConfig(color_schemes=())
-
-
-@pytest.mark.parametrize("value", [0, -1])
-def test_refresh_rate_must_be_positive(value: int) -> None:
-    with pytest.raises(ValueError):
-        PulseConfig(refresh_per_second=value)
-
-
-@pytest.mark.parametrize("value", [0, -1])
-def test_reference_text_length_must_be_positive(value: int) -> None:
-    with pytest.raises(ValueError):
-        PulseConfig(reference_text_length=value)
-
-
 @pytest.mark.parametrize(
-    "field_name",
-    [
-        "expand_seconds",
-        "contract_seconds",
-        "initial_rest_seconds",
-        "rest_seconds",
-        "underglow_rise_seconds",
-        "underglow_fall_seconds",
-    ],
+    "mode",
+    ["left_to_right", "right_to_left", "bounce"],
 )
-def test_negative_timing_values_are_rejected(field_name: str) -> None:
+def test_supported_modes(mode: str) -> None:
+    assert PulseConfig(mode=mode).mode == mode
+
+
+def test_unknown_mode_is_rejected() -> None:
     with pytest.raises(ValueError):
-        PulseConfig(**{field_name: -0.01})
+        PulseConfig(mode="sideways")  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize(
-    "field_name",
-    [
-        "expand_seconds",
-        "contract_seconds",
-        "rest_seconds",
-    ],
-)
-def test_nonfinite_heartbeat_timings_are_rejected(field_name: str) -> None:
+@pytest.mark.parametrize("value", [0.0, -0.1, math.inf])
+def test_invalid_travel_seconds_are_rejected(value: float) -> None:
     with pytest.raises(ValueError):
-        PulseConfig(**{field_name: math.inf})
+        PulseConfig(travel_seconds=value)
 
 
-def test_zero_total_heartbeat_cycle_is_rejected() -> None:
+@pytest.mark.parametrize("value", [-0.1, 1.1, math.nan])
+def test_invalid_color_strength_is_rejected(value: float) -> None:
     with pytest.raises(ValueError):
-        PulseConfig(
-            expand_seconds=0,
-            contract_seconds=0,
-            rest_seconds=0,
-        )
+        PulseConfig(color_strength=value)
 
 
-def test_safe_zero_active_heartbeat_is_allowed() -> None:
+@pytest.mark.parametrize("value", [0.0, -1.0, math.inf])
+def test_invalid_width_is_rejected(value: float) -> None:
+    with pytest.raises(ValueError):
+        PulseConfig(pulse_width_ratio=value)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, math.inf])
+def test_invalid_envelope_power_is_rejected(value: float) -> None:
+    with pytest.raises(ValueError):
+        PulseConfig(envelope_power=value)
+
+
+def test_pulse_width_defaults_to_phrase_length() -> None:
+    assert pulse_module._pulse_radius(20, 1.0) == pytest.approx(10.0)
+
+
+def test_left_edge_enters_before_center() -> None:
+    text = "ABCDEFGHIJK"
+    scheme = DEFAULT_COLOR_SCHEMES[0]
+
+    entering = pulse_module._render_travel_frame(
+        text,
+        0.10,
+        scheme,
+        None,
+        bold_active_text=True,
+        color_strength=0.3,
+        neutral_dampening_color=(235, 235, 235),
+        pulse_width_ratio=1.0,
+        envelope_power=1.0,
+    )
+    active = _active_indexes(entering)
+
+    assert active
+    assert min(active) == 0
+    assert max(active) < len(text) // 2
+
+
+def test_midpoint_touches_entire_phrase() -> None:
+    text = "ABCDEFGHIJK"
+    scheme = DEFAULT_COLOR_SCHEMES[0]
+
+    midpoint = pulse_module._render_travel_frame(
+        text,
+        0.50,
+        scheme,
+        None,
+        bold_active_text=True,
+        color_strength=0.3,
+        neutral_dampening_color=(235, 235, 235),
+        pulse_width_ratio=1.0,
+        envelope_power=1.0,
+    )
+
+    assert _active_indexes(midpoint) == set(range(len(text)))
+
+
+def test_right_edge_is_last_visible_region() -> None:
+    text = "ABCDEFGHIJK"
+    scheme = DEFAULT_COLOR_SCHEMES[0]
+
+    leaving = pulse_module._render_travel_frame(
+        text,
+        0.90,
+        scheme,
+        None,
+        bold_active_text=True,
+        color_strength=0.3,
+        neutral_dampening_color=(235, 235, 235),
+        pulse_width_ratio=1.0,
+        envelope_power=1.0,
+    )
+    active = _active_indexes(leaving)
+
+    assert active
+    assert max(active) == len(text) - 1
+    assert min(active) > len(text) // 2
+
+
+def test_center_is_stronger_than_edges() -> None:
+    radius = 10.0
+    center = pulse_module._envelope_amount(0.0, radius, 1.0)
+    halfway = pulse_module._envelope_amount(5.0, radius, 1.0)
+    edge = pulse_module._envelope_amount(9.9, radius, 1.0)
+
+    assert center > halfway > edge > 0.0
+
+
+def test_bounce_goes_forward_then_back_without_rest_between_legs() -> None:
     config = PulseConfig(
-        expand_seconds=0,
-        contract_seconds=0,
-        rest_seconds=1,
+        mode="bounce",
+        travel_seconds=1.0,
+        rest_seconds=0.5,
     )
 
-    assert config.expand_seconds == 0
-    assert config.contract_seconds == 0
+    assert pulse_module._cycle_timing(0.25, config) == pytest.approx((0, 0.25))
+    assert pulse_module._cycle_timing(1.25, config) == pytest.approx((0, 0.75))
+    assert pulse_module._cycle_timing(1.75, config) == pytest.approx((0, 0.25))
+    assert pulse_module._cycle_timing(2.25, config) is None
 
 
-def test_disabled_underglow_may_have_zero_cycle() -> None:
+def test_right_to_left_reverses_progress() -> None:
     config = PulseConfig(
-        underglow_enabled=False,
-        underglow_rise_seconds=0,
-        underglow_fall_seconds=0,
+        mode="right_to_left",
+        travel_seconds=1.0,
+        rest_seconds=0.5,
     )
-
-    assert config.underglow_enabled is False
-
-
-def test_enabled_underglow_requires_nonzero_cycle() -> None:
-    with pytest.raises(ValueError):
-        PulseConfig(
-            underglow_enabled=True,
-            underglow_rise_seconds=0,
-            underglow_fall_seconds=0,
-        )
-
-
-def test_enabled_underglow_allows_one_zero_leg() -> None:
-    PulseConfig(
-        underglow_enabled=True,
-        underglow_rise_seconds=0,
-        underglow_fall_seconds=2,
-    )
-
-    PulseConfig(
-        underglow_enabled=True,
-        underglow_rise_seconds=2,
-        underglow_fall_seconds=0,
-    )
-
-
-@pytest.mark.parametrize(
-    ("minimum", "maximum"),
-    [
-        (0, 1),
-        (-1, 1),
-        (1, 0),
-        (1, -1),
-        (2, 1),
-        (math.inf, math.inf),
-    ],
-)
-def test_invalid_beat_scale_relationships_are_rejected(
-    minimum: float,
-    maximum: float,
-) -> None:
-    with pytest.raises(ValueError):
-        PulseConfig(
-            min_beat_scale=minimum,
-            max_beat_scale=maximum,
-        )
-
-
-def test_nonfinite_color_strength_is_rejected() -> None:
-    with pytest.raises(ValueError):
-        PulseConfig(color_strength=math.nan)
-
-
-def test_nonfinite_overshoot_is_rejected() -> None:
-    with pytest.raises(ValueError):
-        PulseConfig(pulse_overshoot=math.inf)
-
-
-def test_interpolate_rgb_clamps_amount() -> None:
-    assert pulse_module._interpolate_rgb((0, 0, 0), (100, 100, 100), -1) == (
-        0,
-        0,
-        0,
-    )
-    assert pulse_module._interpolate_rgb((0, 0, 0), (100, 100, 100), 2) == (
-        100,
-        100,
-        100,
-    )
-
-
-def test_dampening_zero_returns_neutral_color() -> None:
-    assert pulse_module._dampen_rgb(
-        (255, 0, 0),
-        0,
-        (235, 235, 235),
-    ) == (235, 235, 235)
-
-
-def test_dampening_one_returns_requested_color() -> None:
-    assert pulse_module._dampen_rgb(
-        (255, 0, 0),
-        1,
-        (235, 235, 235),
-    ) == (255, 0, 0)
-
-
-def test_beat_duration_scale_is_one_at_reference_length() -> None:
-    config = PulseConfig(reference_text_length=32)
-
-    assert pulse_module._beat_duration_scale(32, config) == pytest.approx(1.0)
-
-
-def test_beat_duration_scale_respects_bounds() -> None:
-    config = PulseConfig(
-        reference_text_length=32,
-        min_beat_scale=0.8,
-        max_beat_scale=1.2,
-    )
-
-    assert pulse_module._beat_duration_scale(1, config) == pytest.approx(0.8)
-    assert pulse_module._beat_duration_scale(10000, config) == pytest.approx(
-        1.2
-    )
+    cycle, progress = pulse_module._cycle_timing(0.25, config)
+    assert cycle == 0
+    assert progress == pytest.approx(0.75)
 
 
 def test_rendering_never_changes_caller_text() -> None:
-    rendered = pulse_module._render_heartbeat_frame(
+    rendered = pulse_module._render_travel_frame(
         "Working -",
-        1.0,
+        0.5,
         DEFAULT_COLOR_SCHEMES[0],
         None,
         bold_active_text=True,
         color_strength=0.3,
         neutral_dampening_color=(235, 235, 235),
+        pulse_width_ratio=1.0,
+        envelope_power=1.0,
     )
 
     assert rendered.plain == "Working -"
 
 
-def test_center_out_frame_styles_center_first() -> None:
-    rendered = pulse_module._render_heartbeat_frame(
-        "ABCDE",
-        0.0,
-        DEFAULT_COLOR_SCHEMES[0],
-        None,
-        bold_active_text=True,
-        color_strength=0.3,
-        neutral_dampening_color=(235, 235, 235),
-    )
-
-    assert any(span.start == 2 and span.end == 3 for span in rendered.spans)
-
-
-def test_enabled_false_prints_static_text_before_work(
+def test_disabled_false_prints_static_text_before_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     console, stream = _interactive_console()
@@ -477,48 +405,17 @@ def test_clean_exit_restores_static_baseline(
     assert live.exited is True
 
 
-def test_runtime_error_propagates_same_exception(
+@pytest.mark.parametrize(
+    "error",
+    [RuntimeError("boom"), KeyboardInterrupt(), SystemExit(7)],
+)
+def test_caller_exception_propagates_same_exception(
     monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
 ) -> None:
     monkeypatch.setattr(pulse_module, "Live", RecordingLive)
 
-    error = RuntimeError("boom")
-
-    with pytest.raises(RuntimeError) as caught:
-        with activity_pulse(
-            "Working -",
-            console=_interactive_console()[0],
-        ):
-            raise error
-
-    assert caught.value is error
-
-
-def test_keyboard_interrupt_propagates_same_exception(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(pulse_module, "Live", RecordingLive)
-
-    error = KeyboardInterrupt()
-
-    with pytest.raises(KeyboardInterrupt) as caught:
-        with activity_pulse(
-            "Working -",
-            console=_interactive_console()[0],
-        ):
-            raise error
-
-    assert caught.value is error
-
-
-def test_system_exit_propagates_same_exception(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(pulse_module, "Live", RecordingLive)
-
-    error = SystemExit(7)
-
-    with pytest.raises(SystemExit) as caught:
+    with pytest.raises(type(error)) as caught:
         with activity_pulse(
             "Working -",
             console=_interactive_console()[0],
@@ -543,18 +440,3 @@ def test_activity_pulse_does_not_take_signal_ownership(
         console=_interactive_console()[0],
     ):
         pass
-
-
-def test_color_schemes_can_opt_into_transition_cycles() -> None:
-    expected = pulse_module._interpolate_scheme(
-        DEFAULT_COLOR_SCHEMES[0],
-        DEFAULT_COLOR_SCHEMES[1],
-        0.5,
-    )
-
-    assert pulse_module._scheme_for_cycle(
-        1,
-        0,
-        DEFAULT_COLOR_SCHEMES,
-        blend_between_schemes=True,
-    ) == expected
