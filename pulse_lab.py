@@ -4,7 +4,7 @@ import os
 import time
 from contextlib import contextmanager
 from time import monotonic
-from typing import Iterator
+from typing import Iterator, Literal
 
 from activity_pulse import PulseConfig, activity_pulse
 
@@ -16,10 +16,10 @@ DEMO_AUTO_STOP_SECONDS = 300.0
 DEMO_POLL_SECONDS = 0.03
 
 # Mike knobs: change these first.
-LAB_MODE = "left_to_right"  # "left_to_right", "right_to_left", "bounce"
-LAB_COLOR_STRENGTH = 0.30
-LAB_TRAVEL_SECONDS = 0.65
-LAB_REST_SECONDS = 0.45
+LAB_MODE: Literal["left_to_right", "right_to_left", "bounce"] = "left_to_right"
+LAB_TRAVEL_SECONDS = 0.8
+LAB_COLOR_STRENGTH = 0.5
+LAB_REST_SECONDS = 1.3
 LAB_PULSE_WIDTH_RATIO = 1.0
 LAB_ENVELOPE_POWER = 1.0
 

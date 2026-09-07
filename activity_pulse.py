@@ -49,12 +49,12 @@ class PulseConfig:
     mode: PulseMode = "left_to_right"
 
     refresh_per_second: int = 60
-    travel_seconds: float = 0.65
+    travel_seconds: float = 0.8
     initial_rest_seconds: float = 0.75
-    rest_seconds: float = 0.45
+    rest_seconds: float = 1.3
 
     bold_active_text: bool = True
-    color_strength: float = 0.30
+    color_strength: float = 0.5
     neutral_dampening_color: RGB = (235, 235, 235)
 
     pulse_width_ratio: float = 1.0

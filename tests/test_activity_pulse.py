@@ -78,7 +78,6 @@ def test_default_config_is_valid() -> None:
 
 def test_default_palette_is_ten_color_rainbow() -> None:
     assert len(DEFAULT_COLOR_SCHEMES) == 10
-    assert DEFAULT_PULSE_CONFIG.color_strength == pytest.approx(0.30)
     assert DEFAULT_PULSE_CONFIG.mode == "left_to_right"
 
 
