@@ -5,15 +5,14 @@ from __future__ import annotations
 import random
 from contextlib import contextmanager
 from dataclasses import dataclass
-from math import isfinite, sqrt
+from math import cos, isfinite, pi
 from time import monotonic
-from typing import Iterator
+from typing import Iterator, Literal
 
 from rich.console import Console
 from rich.live import Live
 from rich.style import Style
 from rich.text import Text
-
 
 
 __all__ = [
@@ -25,12 +24,20 @@ __all__ = [
 
 RGB = tuple[int, int, int]
 ColorScheme = tuple[RGB, RGB]
+PulseMode = Literal["left_to_right", "right_to_left", "bounce"]
 
 
 DEFAULT_COLOR_SCHEMES: tuple[ColorScheme, ...] = (
-    ((255, 151, 239), (157, 20, 139)),  # Magenta
-    ((151, 236, 249), (20, 126, 145)),  # Cyan
-    ((247, 174, 112), (174, 82, 23)),  # Orange
+    ((255, 174, 174), (205, 45, 45)),    # Red
+    ((255, 198, 145), (220, 96, 25)),    # Orange
+    ((255, 220, 145), (208, 142, 20)),   # Amber
+    ((255, 239, 155), (190, 164, 20)),   # Yellow
+    ((210, 244, 155), (100, 168, 35)),   # Lime
+    ((155, 238, 185), (30, 150, 82)),    # Green
+    ((150, 234, 239), (25, 145, 165)),   # Cyan
+    ((155, 198, 250), (45, 98, 205)),    # Blue
+    ((192, 170, 250), (105, 65, 198)),   # Violet
+    ((247, 170, 228), (185, 55, 150)),   # Magenta
 )
 
 
@@ -39,23 +46,19 @@ class PulseConfig:
     """Visual and timing controls for the activity pulse."""
 
     color_schemes: tuple[ColorScheme, ...] = DEFAULT_COLOR_SCHEMES
+    mode: PulseMode = "left_to_right"
 
     refresh_per_second: int = 60
-
-    expand_seconds: float = 0.2
-    contract_seconds: float = 0.3
-    initial_rest_seconds: float = 1.5
-    rest_seconds: float = 1.5
+    travel_seconds: float = 0.65
+    initial_rest_seconds: float = 0.75
+    rest_seconds: float = 0.45
 
     bold_active_text: bool = True
-    color_strength: float = 1.0
-    blend_between_schemes: bool = False
+    color_strength: float = 0.30
     neutral_dampening_color: RGB = (235, 235, 235)
-    pulse_overshoot: float = 0.35
 
-    reference_text_length: int = 32
-    min_beat_scale: float = 0.85
-    max_beat_scale: float = 1.35
+    pulse_width_ratio: float = 1.0
+    envelope_power: float = 1.0
 
     underglow_enabled: bool = False
     activity_rest_color: RGB = (135, 135, 135)
@@ -63,25 +66,24 @@ class PulseConfig:
     underglow_rise_seconds: float = 20.0
     underglow_fall_seconds: float = 20.0
 
-
     def __post_init__(self) -> None:
         """Reject configuration values that make rendering undefined."""
         if not self.color_schemes:
             raise ValueError("PulseConfig.color_schemes must not be empty.")
+
+        if self.mode not in ("left_to_right", "right_to_left", "bounce"):
+            raise ValueError(
+                "PulseConfig.mode must be 'left_to_right', "
+                "'right_to_left', or 'bounce'."
+            )
 
         if self.refresh_per_second <= 0:
             raise ValueError(
                 "PulseConfig.refresh_per_second must be greater than zero."
             )
 
-        if self.reference_text_length <= 0:
-            raise ValueError(
-                "PulseConfig.reference_text_length must be greater than zero."
-            )
-
         timing_values = (
-            ("expand_seconds", self.expand_seconds),
-            ("contract_seconds", self.contract_seconds),
+            ("travel_seconds", self.travel_seconds),
             ("initial_rest_seconds", self.initial_rest_seconds),
             ("rest_seconds", self.rest_seconds),
             ("underglow_rise_seconds", self.underglow_rise_seconds),
@@ -94,14 +96,9 @@ class PulseConfig:
                     f"PulseConfig.{name} must be finite and non-negative."
                 )
 
-        if (
-            self.expand_seconds
-            + self.contract_seconds
-            + self.rest_seconds
-            == 0
-        ):
+        if self.travel_seconds <= 0:
             raise ValueError(
-                "PulseConfig heartbeat cycle must have a non-zero duration."
+                "PulseConfig.travel_seconds must be greater than zero."
             )
 
         if (
@@ -115,22 +112,28 @@ class PulseConfig:
             )
 
         if (
-            not isfinite(self.min_beat_scale)
-            or not isfinite(self.max_beat_scale)
-            or self.min_beat_scale <= 0
-            or self.max_beat_scale <= 0
-            or self.min_beat_scale > self.max_beat_scale
+            not isfinite(self.color_strength)
+            or not 0.0 <= self.color_strength <= 1.0
         ):
             raise ValueError(
-                "PulseConfig beat scales must be finite, positive, "
-                "and min_beat_scale must not exceed max_beat_scale."
+                "PulseConfig.color_strength must be finite and between 0 and 1."
             )
 
-        if not isfinite(self.color_strength):
-            raise ValueError("PulseConfig.color_strength must be finite.")
+        if (
+            not isfinite(self.pulse_width_ratio)
+            or self.pulse_width_ratio <= 0
+        ):
+            raise ValueError(
+                "PulseConfig.pulse_width_ratio must be finite and positive."
+            )
 
-        if not isfinite(self.pulse_overshoot):
-            raise ValueError("PulseConfig.pulse_overshoot must be finite.")
+        if (
+            not isfinite(self.envelope_power)
+            or self.envelope_power <= 0
+        ):
+            raise ValueError(
+                "PulseConfig.envelope_power must be finite and positive."
+            )
 
 
 DEFAULT_PULSE_CONFIG = PulseConfig()
@@ -164,42 +167,14 @@ def _dampen_rgb(
     )
 
 
-def _interpolate_scheme(
-    start: ColorScheme,
-    end: ColorScheme,
-    amount: float,
-) -> ColorScheme:
-    return (
-        _interpolate_rgb(start[0], end[0], amount),
-        _interpolate_rgb(start[1], end[1], amount),
-    )
-
-
 def _scheme_for_cycle(
     cycle_number: int,
     start_index: int,
     color_schemes: tuple[ColorScheme, ...],
-    *,
-    blend_between_schemes: bool = False,
 ) -> ColorScheme:
-    stable_count = len(color_schemes)
-
-    if not blend_between_schemes:
-        scheme_index = (start_index + cycle_number) % stable_count
-        return color_schemes[scheme_index]
-
-    stable_index = (start_index + (cycle_number // 2)) % stable_count
-    current_scheme = color_schemes[stable_index]
-
-    if cycle_number % 2 == 0:
-        return current_scheme
-
-    next_scheme = color_schemes[(stable_index + 1) % stable_count]
-    return _interpolate_scheme(
-        current_scheme,
-        next_scheme,
-        0.5,
-    )
+    return color_schemes[
+        (start_index + cycle_number) % len(color_schemes)
+    ]
 
 
 def _activity_style(
@@ -218,28 +193,6 @@ def _activity_style(
     )
 
 
-def _maximum_center_distance(text_length: int) -> float:
-    if text_length <= 1:
-        return 0.0
-
-    return (text_length - 1) / 2
-
-
-def _beat_duration_scale(
-    text_length: int,
-    config: PulseConfig,
-) -> float:
-    if text_length <= 0:
-        return 1.0
-
-    scale = sqrt(text_length / config.reference_text_length)
-
-    return max(
-        config.min_beat_scale,
-        min(config.max_beat_scale, scale),
-    )
-
-
 def _underglow_amount(
     elapsed: float,
     config: PulseConfig,
@@ -250,9 +203,14 @@ def _underglow_amount(
     cycle_position = elapsed % cycle_seconds
 
     if cycle_position < config.underglow_rise_seconds:
+        if config.underglow_rise_seconds == 0:
+            return 1.0
         return cycle_position / config.underglow_rise_seconds
 
     fall_position = cycle_position - config.underglow_rise_seconds
+
+    if config.underglow_fall_seconds == 0:
+        return 0.0
 
     return 1.0 - (fall_position / config.underglow_fall_seconds)
 
@@ -284,7 +242,43 @@ def _render_baseline(
     )
 
 
-def _render_heartbeat_frame(
+def _pulse_radius(
+    text_length: int,
+    pulse_width_ratio: float,
+) -> float:
+    if text_length <= 0:
+        return 0.0
+
+    return max(0.5, (text_length * pulse_width_ratio) / 2.0)
+
+
+def _pulse_center(
+    text_length: int,
+    progress: float,
+    pulse_width_ratio: float,
+) -> float:
+    radius = _pulse_radius(text_length, pulse_width_ratio)
+    start = -radius
+    end = (text_length - 1) + radius
+
+    return start + ((end - start) * max(0.0, min(1.0, progress)))
+
+
+def _envelope_amount(
+    distance: float,
+    radius: float,
+    envelope_power: float,
+) -> float:
+    if radius <= 0 or distance >= radius:
+        return 0.0
+
+    normalized = distance / radius
+    smooth_amount = (1.0 + cos(pi * normalized)) / 2.0
+
+    return smooth_amount ** envelope_power
+
+
+def _render_travel_frame(
     text: str,
     progress: float,
     scheme: ColorScheme,
@@ -293,41 +287,41 @@ def _render_heartbeat_frame(
     bold_active_text: bool,
     color_strength: float,
     neutral_dampening_color: RGB,
+    pulse_width_ratio: float,
+    envelope_power: float,
 ) -> Text:
     if not text:
         return Text()
 
     rendered = _render_baseline(text, rest_color)
-    maximum_distance = _maximum_center_distance(len(text))
-    center = (len(text) - 1) / 2
+    radius = _pulse_radius(len(text), pulse_width_ratio)
+    center = _pulse_center(
+        len(text),
+        progress,
+        pulse_width_ratio,
+    )
     light_color, dark_color = scheme
 
     for index in range(len(text)):
-        distance = abs(index - center)
-
-        normalized_distance = (
-            0.0
-            if maximum_distance == 0
-            else distance / maximum_distance
+        amount = _envelope_amount(
+            abs(index - center),
+            radius,
+            envelope_power,
         )
 
-        if normalized_distance > progress:
+        if amount <= 0.0:
             continue
 
-        if color_strength <= 0.0:
-            pulse_rgb = None
-        else:
-            full_pulse_rgb = _interpolate_rgb(
-                light_color,
-                dark_color,
-                progress - normalized_distance,
-            )
-
-            pulse_rgb = _dampen_rgb(
-                full_pulse_rgb,
-                color_strength,
-                neutral_dampening_color,
-            )
+        full_pulse_rgb = _interpolate_rgb(
+            light_color,
+            dark_color,
+            amount,
+        )
+        pulse_rgb = _dampen_rgb(
+            full_pulse_rgb,
+            color_strength,
+            neutral_dampening_color,
+        )
 
         rendered.stylize(
             _activity_style(
@@ -341,34 +335,50 @@ def _render_heartbeat_frame(
     return rendered
 
 
-class _HeartbeatRenderable:
+def _cycle_timing(
+    elapsed: float,
+    config: PulseConfig,
+) -> tuple[int, float] | None:
+    active_seconds = (
+        config.travel_seconds * 2
+        if config.mode == "bounce"
+        else config.travel_seconds
+    )
+    cycle_seconds = active_seconds + config.rest_seconds
+
+    cycle_number = int(elapsed // cycle_seconds)
+    cycle_position = elapsed % cycle_seconds
+
+    if cycle_position >= active_seconds:
+        return None
+
+    if config.mode == "bounce":
+        if cycle_position < config.travel_seconds:
+            progress = cycle_position / config.travel_seconds
+        else:
+            reverse_position = cycle_position - config.travel_seconds
+            progress = 1.0 - (
+                reverse_position / config.travel_seconds
+            )
+    else:
+        progress = cycle_position / config.travel_seconds
+        if config.mode == "right_to_left":
+            progress = 1.0 - progress
+
+    return cycle_number, progress
+
+
+class _TravelingPulseRenderable:
     def __init__(
         self,
         text: str,
         config: PulseConfig,
     ) -> None:
-
         self.text = text
         self.config = config
         self.started_at = monotonic()
-
         self.start_scheme_index = random.randrange(
             len(config.color_schemes)
-        )
-
-        duration_scale = _beat_duration_scale(
-            len(text),
-            config,
-        )
-
-        self.expand_seconds = config.expand_seconds * duration_scale
-        self.contract_seconds = config.contract_seconds * duration_scale
-
-        self.active_seconds = (
-            self.expand_seconds + self.contract_seconds
-        )
-        self.cycle_seconds = (
-            self.active_seconds + config.rest_seconds
         )
 
     def __rich__(self) -> Text:
@@ -390,48 +400,25 @@ class _HeartbeatRenderable:
         active_elapsed = (
             elapsed - self.config.initial_rest_seconds
         )
-
-        cycle_number = int(
-            active_elapsed // self.cycle_seconds
-        )
-        cycle_position = (
-            active_elapsed % self.cycle_seconds
+        timing = _cycle_timing(
+            active_elapsed,
+            self.config,
         )
 
-        if cycle_position >= self.active_seconds:
+        if timing is None:
             return _render_baseline(
                 self.text,
                 rest_color,
             )
 
+        cycle_number, progress = timing
         scheme = _scheme_for_cycle(
             cycle_number,
             self.start_scheme_index,
             self.config.color_schemes,
-            blend_between_schemes=self.config.blend_between_schemes,
         )
 
-        peak_progress = (
-            1.0 + self.config.pulse_overshoot
-        )
-
-        if cycle_position < self.expand_seconds:
-            progress = (
-                cycle_position / self.expand_seconds
-            ) * peak_progress
-        else:
-            contraction_position = (
-                cycle_position - self.expand_seconds
-            )
-            contraction_progress = (
-                contraction_position / self.contract_seconds
-            )
-            progress = (
-                peak_progress
-                * (1.0 - contraction_progress)
-            )
-
-        return _render_heartbeat_frame(
+        return _render_travel_frame(
             self.text,
             progress,
             scheme,
@@ -439,6 +426,8 @@ class _HeartbeatRenderable:
             bold_active_text=self.config.bold_active_text,
             color_strength=self.config.color_strength,
             neutral_dampening_color=self.config.neutral_dampening_color,
+            pulse_width_ratio=self.config.pulse_width_ratio,
+            envelope_power=self.config.envelope_power,
         )
 
 
@@ -468,13 +457,13 @@ def activity_pulse(
         yield
         return
 
-    heartbeat = _HeartbeatRenderable(
+    pulse = _TravelingPulseRenderable(
         text,
         config,
     )
 
     with Live(
-        heartbeat,
+        pulse,
         console=active_console,
         refresh_per_second=config.refresh_per_second,
         transient=False,
