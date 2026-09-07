@@ -6,14 +6,31 @@ from contextlib import contextmanager
 from time import monotonic
 from typing import Iterator
 
-from activity_pulse import activity_pulse
+from activity_pulse import PulseConfig, activity_pulse
 
 
-DEMO_TEXT = "Verifying vault integrity -"
+DEMO_TEXT = "THIS PROCESS IS STILL ACTIVE."
 
 DEMO_STOP_KEY = "r"
 DEMO_AUTO_STOP_SECONDS = 300.0
 DEMO_POLL_SECONDS = 0.03
+
+# Mike knobs: change these first.
+LAB_MODE = "left_to_right"  # "left_to_right", "right_to_left", "bounce"
+LAB_COLOR_STRENGTH = 0.30
+LAB_TRAVEL_SECONDS = 0.65
+LAB_REST_SECONDS = 0.45
+LAB_PULSE_WIDTH_RATIO = 1.0
+LAB_ENVELOPE_POWER = 1.0
+
+LAB_CONFIG = PulseConfig(
+    mode=LAB_MODE,
+    color_strength=LAB_COLOR_STRENGTH,
+    travel_seconds=LAB_TRAVEL_SECONDS,
+    rest_seconds=LAB_REST_SECONDS,
+    pulse_width_ratio=LAB_PULSE_WIDTH_RATIO,
+    envelope_power=LAB_ENVELOPE_POWER,
+)
 
 
 @contextmanager
@@ -89,8 +106,14 @@ def _simulate_caller() -> None:
         f"(automatic stop after "
         f"{DEMO_AUTO_STOP_SECONDS:g} seconds)."
     )
+    print(
+        f"mode={LAB_MODE} strength={LAB_COLOR_STRENGTH:.0%} "
+        f"travel={LAB_TRAVEL_SECONDS:.2f}s "
+        f"width={LAB_PULSE_WIDTH_RATIO:.2f} "
+        f"envelope={LAB_ENVELOPE_POWER:.2f}"
+    )
 
-    with activity_pulse(DEMO_TEXT):
+    with activity_pulse(DEMO_TEXT, config=LAB_CONFIG):
         stop_reason = _wait_for_lab_stop()
 
     print(
